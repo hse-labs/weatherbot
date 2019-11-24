@@ -1,11 +1,12 @@
-from TOKEN import TOKEN
+
 import telebot as tb
 import pyowm
+import os
 
-
-bot = tb.TeleBot(token=f'{TOKEN}')
-URL = f'https://api.telegram.org/bot{TOKEN}/'
-owm = pyowm.OWM(API_key='7cb6354ecb987867617b2f060da2293c', language='ru')
+TELEGRAM_TOKEN = os.getenv('TELEGRAM_TOKEN')
+bot = tb.TeleBot(token=f'{TELEGRAM_TOKEN}')
+OWM_API_KEY = os.getenv('OWM_API_KEY')
+owm = pyowm.OWM(API_key=f'{OWM_API_KEY}', language='ru')
 
 
 @bot.message_handler(commands=['start'])
@@ -25,10 +26,10 @@ def get_location(message):
 
 
 def get_weather(location):
-    obs = owm.weather_at_place('Москва')
+    obs = owm.weather_at_place(location)
     weather = obs.get_weather()
     print(weather)
-    return weather
+    return send_weather(weather)
 
 
 def send_weather(weather):
@@ -36,7 +37,7 @@ def send_weather(weather):
 
 
 def main():
-    get_weather()
+    pass
 
 
 bot.polling()
