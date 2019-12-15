@@ -1,27 +1,25 @@
 import os
-import re
+from re import fullmatch
+from collections import namedtuple
+import schedule
 import telebot as tb
 import pyowm
+
 
 TELEGRAM_TOKEN = os.getenv('TELEGRAM_TOKEN')
 bot = tb.TeleBot(token=TELEGRAM_TOKEN)
 OWM_API_KEY = os.getenv('OWM_API_KEY')
 owm = pyowm.OWM(API_key=OWM_API_KEY, language='ru')
+WEATHER_TUPLE = namedtuple('weather', ['status', 'temp', 'wind', 'humidity', 'pressure'])
+user_dict = {}
 
 
-def get_weather(location):
+def owm_weather(location):
     obs = owm.weather_at_place(location[0])
     w = obs.get_weather()
-    status = w.get_detailed_status()
-    temp = w.get_temperature(unit='celsius')
-    wind = w.get_wind()
-    humidity = w.get_humidity()
-    pressure = w.get_pressure()
-    return status, temp, wind, humidity, pressure
-
-
-def set_up_daily():
-    pass
+    weather = WEATHER_TUPLE(status=w.get_detailed_status(), temp=w.get_temperature(), wind=w.get_wind(),
+                            humidity=w.get_humidity(), pressure=w.get_pressure())
+    return weather
 
 
 @bot.message_handler(commands=['start'])
@@ -34,50 +32,66 @@ def command_help(message):
     bot.reply_to(message, 'Этот бот показывает, какая сейчас погода в городе.')
 
 
-@bot.message_handler(commands=['notify'])
-def command_notify(message):
-    bot.reply_to(message, '')
-
-
 @bot.message_handler(func=lambda msg: msg.content_type == 'text')
-def get_send_message(message):
+def weather_sender(message):
+    global chat_id
     try:
-        global status, temp, wind, humidity, pressure
+        chat_id = message.chat.id
+        print(chat_id)
         location = message.text.split()
-        status, temp, wind, humidity, pressure = get_weather(location)
-        to_send = f'{status.capitalize()}\nСредняя температура:{temp["temp"]}C\n' \
-                  f'Максимальная температура:{temp["temp_max"]}C\nМинимальная температура:{temp["temp_min"]}C\n' \
-                  f'Скорость ветра {wind["speed"]} м/c\nВлажность воздуха:{humidity}%\n' \
-                  f'Атмосферное давление {round(pressure["press"] / 1.333)} мм рт.ст.'
-        bot.reply_to(message, text='*Прогноз погоды на сегодня:\n*' + to_send, parse_mode='Markdown')
+        user_dict[chat_id] = {'location': location[0]}
+        weather = owm_weather(location)
+        message_to_send = f'{weather.status.capitalize()}\nСредняя температура:{weather.temp["temp"]}C\n' \
+                          f'Максимальная температура:{weather.temp["temp_max"]}C\n' \
+                          f'Минимальная температура:{weather.temp["temp_min"]}C/n' \
+                          f'Скорость ветра {weather.wind["speed"]} м/c\n' \
+                          f'Влажность воздуха:{weather.humidity}%\n' \
+                          f'Атмосферное давление {round(weather.pressure["press"] / 1.333)} мм рт.ст.'
+        bot.reply_to(message, text='*Прогноз погоды на сегодня:\n*' + message_to_send, parse_mode='Markdown')
         msg = bot.reply_to(message, text='Установить ежедневные оповещения о погоде?')
-        bot.register_next_step_handler(msg, notification_handler)
+        bot.register_next_step_handler(msg, notification_setter)
     except Exception as e:
+        print(e)
         bot.reply_to(message, text='Кажется, что-то пошло не так, попробуй еще раз.')
 
 
-def notification_handler(message):
-    try:
-        answer = message.text
-        if answer.lower() == 'да':
-            msg = bot.reply_to(message, text='Хорошо. В какое время присылать оповещения? \n'
-                                             'Время должно быть описано в таком формате: 00:00')
-            bot.register_next_step_handler(msg, time_setter)
-        else:
-            bot.reply_to(message, text='Приходи еще.')
-    except Exception as e:
-        bot.reply_to(message, text='Кажется, что-то пошло не так, попробуй еще раз.')
+def notification_setter(message):
+    answer = message.text
+    if answer.lower() == 'да':
+        msg = bot.reply_to(message, text='Хорошо. В какое время присылать оповещения?')
+        bot.register_next_step_handler(msg, time_setter)
+    else:
+        bot.reply_to(message, text='Приходи еще!')
 
 
 def time_setter(message):
-    m = message.text
-    print(m)
-    pattern = r'(?:[0-1]?[0-9]|2[1-4])\:[0-5][0-9]'
-    t = re.search(pattern, m)
-    print(t)
+    t = message.text
+    pattern = r'[0-2][0-9]\:[0-5][0-9]'
+    check_valid_time = fullmatch(pattern, t)
+    if check_valid_time:
+        user_dict[chat_id].update({'time': t})
+        print(user_dict)
+        set_up_daily(t)
+        bot.reply_to(message, text='Установлены ежедневные оповещения в {}'.format(t))
+        bot.register_next_step_handler(message, automatic_weather_sender, t)
+    else:
+        bot.reply_to(message, text='Кажется, что-то пошло не так, попробуй еще раз.')
 
+
+def automatic_weather_sender(t):
+    location = user_dict[chat_id]['location']
+    weather = owm_weather(location)
+    message_to_send = f'{weather.status.capitalize()}\nСредняя температура:{weather.temp["temp"]}C\n' \
+                      f'Максимальная температура:{weather.temp["temp_max"]}C\n' \
+                      f'Минимальная температура:{weather.temp["temp_min"]}C/n' \
+                      f'Скорость ветра {weather.wind["speed"]} м/c\n' \
+                      f'Влажность воздуха:{weather.humidity}%\n' \
+                      f'Атмосферное давление {round(weather.pressure["press"] / 1.333)} мм рт.ст.'
+    bot.send_message(chat_id, text='*Прогноз погоды на сегодня:\n*' + message_to_send, parse_mode='Markdown')
+
+
+def set_up_daily(t):
+    schedule.every().day.at(t).do(automatic_weather_sender)
 
 
 bot.polling()
-
-
